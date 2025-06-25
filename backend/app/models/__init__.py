@@ -5,7 +5,8 @@ from .project import Project
 from .lean_canvas import LeanCanvas
 from .team_matching import TeamOpening, TeamApplication
 from .ai_report import AIReport
-from .resume import Resume  # 새로 추가
+from .resume import Resume
+from .research_lab import Department, Professor, ResearchLab, ProjectLabMatching  # 새로 추가
 
 # __all__로 export할 모델들 정의
 __all__ = [
@@ -15,5 +16,9 @@ __all__ = [
     "TeamOpening",
     "TeamApplication",
     "AIReport",
-    "Resume"  # 새로 추가
+    "Resume",
+    "Department",      # 새로 추가
+    "Professor",       # 새로 추가
+    "ResearchLab",     # 새로 추가
+    "ProjectLabMatching"  # 새로 추가
 ]
