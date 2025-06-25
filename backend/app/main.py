@@ -1,4 +1,4 @@
-﻿# backend/app/main.py 업데이트
+﻿# backend/app/main.py 업데이트 (법적 문서 라우터 추가)
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.database import engine, Base
@@ -9,7 +9,8 @@ from app.models import *
 # 라우터 import
 from app.routers import (
     auth, users, projects, ai_reports, lean_canvas, 
-    team_matching, resumes, dashboard, research_labs  # 새로 추가
+    team_matching, resumes, dashboard, research_labs,
+    legal_documents  # 새로 추가
 )
 
 # 데이터베이스 테이블 생성
@@ -17,8 +18,8 @@ Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
     title="세종 스타트업 네비게이터 API",
-    description="해커톤 MVP + 연구실 매칭 시스템",
-    version="1.1.0"
+    description="해커톤 MVP + 연구실 매칭 + 법적 문서 생성 시스템",
+    version="1.2.0"
 )
 
 # CORS 설정
@@ -39,28 +40,36 @@ app.include_router(lean_canvas.router, prefix="/lean-canvas", tags=["lean-canvas
 app.include_router(team_matching.router, prefix="/team", tags=["Team Matching"])
 app.include_router(resumes.router, prefix="/resumes", tags=["Resumes"])
 app.include_router(dashboard.router, prefix="/dashboard", tags=["Dashboard"])
-app.include_router(research_labs.router, prefix="/research-labs", tags=["Research Labs"])  # 새로 추가
+app.include_router(research_labs.router, prefix="/research-labs", tags=["Research Labs"])
+app.include_router(legal_documents.router, prefix="/legal-docs", tags=["Legal Documents"])  # 새로 추가
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy", "message": "세종 스타트업 네비게이터 + 연구실 매칭 API"}
+    return {"status": "healthy", "message": "세종 스타트업 네비게이터 + 법적 문서 생성 API"}
 
 @app.get("/")
 async def root():
-    return {"message": "세종 스타트업 네비게이터 + 연구실 매칭 API에 오신 것을 환영합니다!"}
+    return {"message": "세종 스타트업 네비게이터 + 법적 문서 생성 API에 오신 것을 환영합니다!"}
 
 @app.get("/api/info")
 async def api_info():
     """API 정보 및 새로운 기능 안내"""
     return {
         "service_name": "세종 스타트업 네비게이터",
-        "version": "1.1.0",
+        "version": "1.2.0",
         "new_features": [
             "연구실 데이터베이스 통합",
-            "AI 기반 프로젝트-연구실 매칭",
+            "AI 기반 프로젝트-연구실 매칭", 
+            "AI 법적 문서 생성 (이용약관, 개인정보처리방침)",  # 새로 추가
             "세종대 인공지능융합대학 연구실 정보",
             "협력 연구 추천 시스템"
         ],
+        "legal_docs": {  # 새로 추가
+            "supported_documents": ["서비스 이용약관", "개인정보처리방침"],
+            "output_formats": ["JSON", "Markdown"],
+            "templates": ["스타트업 기본", "모바일 앱", "웹 서비스", "AI 서비스"],
+            "disclaimer": "AI 생성 문서는 가이드라인이며, 법무 검토 필수"
+        },
         "research_labs": {
             "total_departments": "7개 학과",
             "total_labs": "20+ 연구실",

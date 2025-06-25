@@ -39,10 +39,10 @@ class AIReportResponse(BaseModel):
     project_id: int
     requester_id: int
     report_type: str
-    idea_info: Optional[Dict[str, Any]] = None
-    existing_services: Optional[Dict[str, Any]] = None
-    service_limitations: Optional[str] = None
-    lean_canvas_detailed: Optional[Dict[str, Any]] = None
+    idea_info: Optional[Dict[str, Any]] = None  # ✅ Dict로 올바름
+    existing_services: Optional[Dict[str, Any]] = None  # ✅ Dict로 올바름
+    service_limitations: Optional[Dict[str, Any]] = None  # ❌ 이 부분이 문제였음 (원래 str이었음)
+    lean_canvas_detailed: Optional[Dict[str, Any]] = None  # ✅ Dict로 올바름
     confidence_score: Optional[float] = None
     data_sources: Optional[str] = None
     generation_time_seconds: Optional[int] = None

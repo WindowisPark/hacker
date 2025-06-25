@@ -1,7 +1,7 @@
-# backend/app/routers/research_labs.py
+# backend/app/routers/research_labs.py (수정된 버전 2)
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, or_, text  # text 추가
 from typing import List, Optional
 import json
 
@@ -18,6 +18,354 @@ from app.services.lab_matching import LabMatchingService
 
 router = APIRouter(tags=["Research Labs"])
 
+@router.get("/departments")
+async def get_departments(db: Session = Depends(get_db)):
+    """학과 목록 조회"""
+    try:
+        departments = db.query(Department).all()
+        
+        dept_data = []
+        for dept in departments:
+            # 각 학과의 연구실 수 계산 (수정된 쿼리)
+            lab_count = db.query(ResearchLab).join(Professor, ResearchLab.director_id == Professor.professor_id).filter(
+                Professor.department_id == dept.department_id,
+                ResearchLab.is_active == True  # None이 아닌 True로 명시적 비교
+            ).count()
+            
+            dept_dict = {
+                "department_id": dept.department_id,
+                "name": dept.name,
+                "name_en": dept.name_en,
+                "college": dept.college,
+                "building": dept.building,
+                "description": dept.description,
+                "lab_count": lab_count,
+                "created_at": dept.created_at.isoformat() if dept.created_at else None
+            }
+            dept_data.append(dept_dict)
+        
+        return {
+            "success": True,
+            "message": "학과 목록을 성공적으로 조회했습니다.",
+            "data": dept_data
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"학과 목록 조회 중 오류: {str(e)}"
+        )
+
+@router.get("/statistics")
+async def get_lab_statistics(db: Session = Depends(get_db)):
+    """연구실 관련 통계"""
+    try:
+        # 기본 통계
+        total_labs = db.query(ResearchLab).filter(ResearchLab.is_active == True).count()
+        total_departments = db.query(Department).count()
+        total_professors = db.query(Professor).filter(Professor.is_active == True).count()
+        
+        # 학과별 연구실 수 (text() 사용)
+        dept_stats = db.execute(text("""
+            SELECT d.name, COUNT(rl.lab_id) as lab_count
+            FROM departments d
+            LEFT JOIN professors p ON d.department_id = p.department_id
+            LEFT JOIN research_labs rl ON p.professor_id = rl.director_id AND rl.is_active = 1
+            GROUP BY d.department_id, d.name
+            ORDER BY lab_count DESC
+        """)).fetchall()
+        
+        dept_distribution = {row[0]: row[1] for row in dept_stats}
+        
+        # 최근 매칭 활동 (더 간단한 방법)
+        from datetime import datetime, timedelta
+        thirty_days_ago = datetime.utcnow() - timedelta(days=30)
+        recent_matchings = db.query(ProjectLabMatching).filter(
+            ProjectLabMatching.created_at >= thirty_days_ago
+        ).count()
+        
+        # 매칭 상태별 분포 (text() 사용)
+        status_stats = db.execute(text("""
+            SELECT status, COUNT(*) as count
+            FROM project_lab_matchings
+            GROUP BY status
+        """)).fetchall()
+        
+        status_distribution = {row[0]: row[1] for row in status_stats}
+        
+        # 연구 분야별 분포 (추가)
+        research_areas_stats = db.execute(text("""
+            SELECT keywords, COUNT(*) as count
+            FROM research_labs
+            WHERE is_active = 1 AND keywords IS NOT NULL
+            GROUP BY keywords
+            LIMIT 10
+        """)).fetchall()
+        
+        # 키워드 추출 및 집계
+        keyword_counts = {}
+        for row in research_areas_stats:
+            if row[0]:
+                keywords = row[0].split(',')
+                for keyword in keywords:
+                    clean_keyword = keyword.strip()
+                    if clean_keyword:
+                        keyword_counts[clean_keyword] = keyword_counts.get(clean_keyword, 0) + 1
+        
+        # 상위 10개 키워드만 선택
+        top_keywords = dict(sorted(keyword_counts.items(), key=lambda x: x[1], reverse=True)[:10])
+        
+        statistics = {
+            "overview": {
+                "total_labs": total_labs,
+                "total_departments": total_departments,
+                "total_professors": total_professors,
+                "recent_matchings": recent_matchings
+            },
+            "department_distribution": dept_distribution,
+            "matching_status_distribution": status_distribution,
+            "top_research_keywords": top_keywords
+        }
+        
+        return {
+            "success": True,
+            "message": "연구실 통계를 성공적으로 조회했습니다.",
+            "data": statistics
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"통계 조회 중 오류: {str(e)}"
+        )
+
+@router.post("/match-project", response_model=SuccessResponse)
+async def find_matching_labs_for_project(
+    request: ProjectMatchingRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """프로젝트에 적합한 연구실 매칭"""
+    try:
+        # 프로젝트 소유권 확인
+        project = db.query(Project).filter(Project.project_id == request.project_id).first()
+        if not project:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="프로젝트를 찾을 수 없습니다."
+            )
+        
+        if project.owner_id != current_user["user_id"]:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="프로젝트 소유자만 연구실 매칭을 요청할 수 있습니다."
+            )
+        
+        # 매칭 서비스 실행
+        matching_service = LabMatchingService(db)
+        matches = matching_service.find_matching_labs(request)
+        
+        # 매칭 결과 저장
+        matching_service.save_matching_results(request.project_id, matches)
+        
+        # 응답 구성
+        response_data = {
+            "project_id": project.project_id,
+            "project_name": project.name,
+            "project_description": project.description,
+            "total_matches": len(matches),
+            "matches": matches
+        }
+        
+        return SuccessResponse(
+            message=f"{len(matches)}개의 매칭되는 연구실을 찾았습니다.",
+            data=response_data
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"연구실 매칭 중 오류: {str(e)}"
+        )
+
+@router.get("/recommendations/{project_id}", response_model=SuccessResponse)
+async def get_recommended_labs(
+    project_id: int,
+    limit: int = Query(5, ge=1, le=10),
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """프로젝트에 추천하는 연구실 (간단한 추천)"""
+    try:
+        # 프로젝트 조회 및 권한 확인
+        project = db.query(Project).filter(Project.project_id == project_id).first()
+        if not project:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="프로젝트를 찾을 수 없습니다."
+            )
+        
+        if project.owner_id != current_user["user_id"]:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="프로젝트 소유자만 추천을 받을 수 있습니다."
+            )
+        
+        # 기본 매칭 요청 생성
+        matching_request = ProjectMatchingRequest(
+            project_id=project_id,
+            max_results=limit,
+            min_score=0.2  # 낮은 임계값으로 더 많은 결과 포함
+        )
+        
+        # 매칭 서비스 실행
+        matching_service = LabMatchingService(db)
+        recommendations = matching_service.find_matching_labs(matching_request)
+        
+        # 추천 이유 간소화
+        simplified_recommendations = []
+        for rec in recommendations:
+            simplified = {
+                "lab_id": rec["lab_id"],
+                "lab_name": rec["lab_name"],
+                "director_name": rec["director_name"],
+                "department_name": rec["department_name"],
+                "similarity_score": rec["similarity_score"],
+                "research_areas": json.loads(rec["research_areas"]) if rec["research_areas"] else [],
+                "recommendation_reason": f"유사도 {rec['similarity_score']:.1%} - 연구분야 및 기술스택 매칭",
+                "contact_info": rec["contact_info"]
+            }
+            simplified_recommendations.append(simplified)
+        
+        return SuccessResponse(
+            message=f"{len(simplified_recommendations)}개의 추천 연구실을 찾았습니다.",
+            data={
+                "project_name": project.name,
+                "recommendations": simplified_recommendations
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"연구실 추천 중 오류: {str(e)}"
+        )
+
+@router.get("/project/{project_id}/matches", response_model=SuccessResponse)
+async def get_project_matching_history(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """프로젝트의 연구실 매칭 이력 조회"""
+    try:
+        # 프로젝트 소유권 확인
+        project = db.query(Project).filter(Project.project_id == project_id).first()
+        if not project:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="프로젝트를 찾을 수 없습니다."
+            )
+        
+        if project.owner_id != current_user["user_id"]:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="프로젝트 소유자만 매칭 이력을 조회할 수 있습니다."
+            )
+        
+        # 매칭 이력 조회
+        matching_service = LabMatchingService(db)
+        history = matching_service.get_project_matching_history(project_id)
+        
+        return SuccessResponse(
+            message="매칭 이력을 성공적으로 조회했습니다.",
+            data={
+                "project_id": project_id,
+                "project_name": project.name,
+                "matches": history
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"매칭 이력 조회 중 오류: {str(e)}"
+        )
+
+@router.put("/matching/{matching_id}/status", response_model=SuccessResponse)
+async def update_matching_status(
+    matching_id: int,
+    status_update: LabMatchingStatusUpdate,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """매칭 상태 업데이트 (연락함, 관심있음, 거절됨 등)"""
+    try:
+        # 매칭 레코드 조회
+        matching = db.query(ProjectLabMatching).filter(
+            ProjectLabMatching.matching_id == matching_id
+        ).first()
+        
+        if not matching:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="매칭 레코드를 찾을 수 없습니다."
+            )
+        
+        # 프로젝트 소유권 확인
+        project = db.query(Project).filter(Project.project_id == matching.project_id).first()
+        if project.owner_id != current_user["user_id"]:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="프로젝트 소유자만 매칭 상태를 변경할 수 있습니다."
+            )
+        
+        # 상태 업데이트
+        valid_statuses = ["SUGGESTED", "CONTACTED", "INTERESTED", "DECLINED", "COLLABORATION"]
+        if status_update.status not in valid_statuses:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"유효하지 않은 상태입니다. 가능한 값: {', '.join(valid_statuses)}"
+            )
+        
+        matching.status = status_update.status
+        from datetime import datetime
+        if status_update.status == "CONTACTED":
+            matching.contacted_at = datetime.utcnow()
+        elif status_update.status in ["INTERESTED", "DECLINED"]:
+            matching.response_at = datetime.utcnow()
+        
+        # 메모가 있으면 매칭 이유에 추가
+        if status_update.notes:
+            current_reason = matching.matching_reason or ""
+            matching.matching_reason = f"{current_reason}\n\n사용자 메모: {status_update.notes}"
+        
+        db.commit()
+        
+        return SuccessResponse(
+            message="매칭 상태가 성공적으로 업데이트되었습니다.",
+            data={
+                "matching_id": matching_id,
+                "new_status": matching.status,
+                "updated_at": matching.response_at or matching.contacted_at
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"매칭 상태 업데이트 중 오류: {str(e)}"
+        )
+
 @router.get("/", response_model=SuccessResponse)
 async def get_research_labs(
     department: Optional[str] = Query(None, description="학과명으로 필터"),
@@ -32,7 +380,9 @@ async def get_research_labs(
         
         # 학과별 필터링
         if department:
-            query = query.join(Professor).join(Department).filter(
+            query = query.join(Professor, ResearchLab.director_id == Professor.professor_id).join(
+                Department, Professor.department_id == Department.department_id
+            ).filter(
                 Department.name.ilike(f"%{department}%")
             )
         
@@ -159,326 +509,4 @@ async def get_research_lab_detail(lab_id: int, db: Session = Depends(get_db)):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"연구실 상세 조회 중 오류: {str(e)}"
-        )
-
-@router.post("/match-project", response_model=SuccessResponse)
-async def find_matching_labs_for_project(
-    request: ProjectMatchingRequest,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
-):
-    """프로젝트에 적합한 연구실 매칭"""
-    try:
-        # 프로젝트 소유권 확인
-        project = db.query(Project).filter(Project.project_id == request.project_id).first()
-        if not project:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="프로젝트를 찾을 수 없습니다."
-            )
-        
-        if project.owner_id != current_user["user_id"]:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="프로젝트 소유자만 연구실 매칭을 요청할 수 있습니다."
-            )
-        
-        # 매칭 서비스 실행
-        matching_service = LabMatchingService(db)
-        matches = matching_service.find_matching_labs(request)
-        
-        # 매칭 결과 저장
-        matching_service.save_matching_results(request.project_id, matches)
-        
-        # 응답 구성
-        response_data = {
-            "project_id": project.project_id,
-            "project_name": project.name,
-            "project_description": project.description,
-            "total_matches": len(matches),
-            "matches": matches
-        }
-        
-        return SuccessResponse(
-            message=f"{len(matches)}개의 매칭되는 연구실을 찾았습니다.",
-            data=response_data
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"연구실 매칭 중 오류: {str(e)}"
-        )
-
-@router.get("/project/{project_id}/matches", response_model=SuccessResponse)
-async def get_project_matching_history(
-    project_id: int,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
-):
-    """프로젝트의 연구실 매칭 이력 조회"""
-    try:
-        # 프로젝트 소유권 확인
-        project = db.query(Project).filter(Project.project_id == project_id).first()
-        if not project:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="프로젝트를 찾을 수 없습니다."
-            )
-        
-        if project.owner_id != current_user["user_id"]:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="프로젝트 소유자만 매칭 이력을 조회할 수 있습니다."
-            )
-        
-        # 매칭 이력 조회
-        matching_service = LabMatchingService(db)
-        history = matching_service.get_project_matching_history(project_id)
-        
-        return SuccessResponse(
-            message="매칭 이력을 성공적으로 조회했습니다.",
-            data={
-                "project_id": project_id,
-                "project_name": project.name,
-                "matches": history
-            }
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"매칭 이력 조회 중 오류: {str(e)}"
-        )
-
-@router.put("/matching/{matching_id}/status", response_model=SuccessResponse)
-async def update_matching_status(
-    matching_id: int,
-    status_update: LabMatchingStatusUpdate,
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
-):
-    """매칭 상태 업데이트 (연락함, 관심있음, 거절됨 등)"""
-    try:
-        # 매칭 레코드 조회
-        matching = db.query(ProjectLabMatching).filter(
-            ProjectLabMatching.matching_id == matching_id
-        ).first()
-        
-        if not matching:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="매칭 레코드를 찾을 수 없습니다."
-            )
-        
-        # 프로젝트 소유권 확인
-        project = db.query(Project).filter(Project.project_id == matching.project_id).first()
-        if project.owner_id != current_user["user_id"]:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="프로젝트 소유자만 매칭 상태를 변경할 수 있습니다."
-            )
-        
-        # 상태 업데이트
-        valid_statuses = ["SUGGESTED", "CONTACTED", "INTERESTED", "DECLINED", "COLLABORATION"]
-        if status_update.status not in valid_statuses:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"유효하지 않은 상태입니다. 가능한 값: {', '.join(valid_statuses)}"
-            )
-        
-        matching.status = status_update.status
-        if status_update.status == "CONTACTED":
-            matching.contacted_at = db.execute("SELECT datetime('now')").scalar()
-        elif status_update.status in ["INTERESTED", "DECLINED"]:
-            matching.response_at = db.execute("SELECT datetime('now')").scalar()
-        
-        # 메모가 있으면 매칭 이유에 추가
-        if status_update.notes:
-            current_reason = matching.matching_reason or ""
-            matching.matching_reason = f"{current_reason}\n\n사용자 메모: {status_update.notes}"
-        
-        db.commit()
-        
-        return SuccessResponse(
-            message="매칭 상태가 성공적으로 업데이트되었습니다.",
-            data={
-                "matching_id": matching_id,
-                "new_status": matching.status,
-                "updated_at": matching.response_at or matching.contacted_at
-            }
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"매칭 상태 업데이트 중 오류: {str(e)}"
-        )
-
-@router.get("/departments")
-async def get_departments(db: Session = Depends(get_db)):
-    """학과 목록 조회"""
-    try:
-        departments = db.query(Department).all()
-        
-        dept_data = []
-        for dept in departments:
-            # 각 학과의 연구실 수 계산
-            lab_count = db.query(ResearchLab).join(Professor).filter(
-                Professor.department_id == dept.department_id,
-                ResearchLab.is_active == True
-            ).count()
-            
-            dept_dict = {
-                "department_id": dept.department_id,
-                "name": dept.name,
-                "name_en": dept.name_en,
-                "college": dept.college,
-                "building": dept.building,
-                "description": dept.description,
-                "lab_count": lab_count,
-                "created_at": dept.created_at.isoformat() if dept.created_at else None
-            }
-            dept_data.append(dept_dict)
-        
-        return {
-            "success": True,
-            "message": "학과 목록을 성공적으로 조회했습니다.",
-            "data": dept_data
-        }
-        
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"학과 목록 조회 중 오류: {str(e)}"
-        )
-
-@router.get("/statistics")
-async def get_lab_statistics(db: Session = Depends(get_db)):
-    """연구실 관련 통계"""
-    try:
-        # 기본 통계
-        total_labs = db.query(ResearchLab).filter(ResearchLab.is_active == True).count()
-        total_departments = db.query(Department).count()
-        total_professors = db.query(Professor).filter(Professor.is_active == True).count()
-        
-        # 학과별 연구실 수
-        dept_stats = db.execute("""
-            SELECT d.name, COUNT(rl.lab_id) as lab_count
-            FROM departments d
-            LEFT JOIN professors p ON d.department_id = p.department_id
-            LEFT JOIN research_labs rl ON p.professor_id = rl.director_id AND rl.is_active = 1
-            GROUP BY d.department_id, d.name
-            ORDER BY lab_count DESC
-        """).fetchall()
-        
-        dept_distribution = {row[0]: row[1] for row in dept_stats}
-        
-        # 최근 매칭 활동
-        recent_matchings = db.query(ProjectLabMatching).filter(
-            ProjectLabMatching.created_at >= db.execute("SELECT datetime('now', '-30 days')").scalar()
-        ).count()
-        
-        # 매칭 상태별 분포
-        status_stats = db.execute("""
-            SELECT status, COUNT(*) as count
-            FROM project_lab_matchings
-            GROUP BY status
-        """).fetchall()
-        
-        status_distribution = {row[0]: row[1] for row in status_stats}
-        
-        statistics = {
-            "overview": {
-                "total_labs": total_labs,
-                "total_departments": total_departments,
-                "total_professors": total_professors,
-                "recent_matchings": recent_matchings
-            },
-            "department_distribution": dept_distribution,
-            "matching_status_distribution": status_distribution
-        }
-        
-        return {
-            "success": True,
-            "message": "연구실 통계를 성공적으로 조회했습니다.",
-            "data": statistics
-        }
-        
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"통계 조회 중 오류: {str(e)}"
-        )
-
-@router.get("/recommendations/{project_id}", response_model=SuccessResponse)
-async def get_recommended_labs(
-    project_id: int,
-    limit: int = Query(5, ge=1, le=10),
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
-):
-    """프로젝트에 추천하는 연구실 (간단한 추천)"""
-    try:
-        # 프로젝트 조회 및 권한 확인
-        project = db.query(Project).filter(Project.project_id == project_id).first()
-        if not project:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="프로젝트를 찾을 수 없습니다."
-            )
-        
-        if project.owner_id != current_user["user_id"]:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="프로젝트 소유자만 추천을 받을 수 있습니다."
-            )
-        
-        # 기본 매칭 요청 생성
-        matching_request = ProjectMatchingRequest(
-            project_id=project_id,
-            max_results=limit,
-            min_score=0.2  # 낮은 임계값으로 더 많은 결과 포함
-        )
-        
-        # 매칭 서비스 실행
-        matching_service = LabMatchingService(db)
-        recommendations = matching_service.find_matching_labs(matching_request)
-        
-        # 추천 이유 간소화
-        simplified_recommendations = []
-        for rec in recommendations:
-            simplified = {
-                "lab_id": rec["lab_id"],
-                "lab_name": rec["lab_name"],
-                "director_name": rec["director_name"],
-                "department_name": rec["department_name"],
-                "similarity_score": rec["similarity_score"],
-                "research_areas": json.loads(rec["research_areas"]) if rec["research_areas"] else [],
-                "recommendation_reason": f"유사도 {rec['similarity_score']:.1%} - 연구분야 및 기술스택 매칭",
-                "contact_info": rec["contact_info"]
-            }
-            simplified_recommendations.append(simplified)
-        
-        return SuccessResponse(
-            message=f"{len(simplified_recommendations)}개의 추천 연구실을 찾았습니다.",
-            data={
-                "project_name": project.name,
-                "recommendations": simplified_recommendations
-            }
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"연구실 추천 중 오류: {str(e)}"
         )
