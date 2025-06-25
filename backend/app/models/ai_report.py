@@ -27,6 +27,9 @@ class AIReport(Base):
     is_latest = Column(Boolean, default=True)
     user_feedback_rating = Column(Integer)  # 사용자 피드백 점수 (1-5)
     user_feedback_comment = Column(Text)
+
+    status = Column(String(20), default="GENERATING")  # 추가
+    error_message = Column(Text)  # 추가
     
     # 관계 설정
     project = relationship("Project", backref="ai_reports")

@@ -15,6 +15,7 @@ class Project(Base):
     target_type = Column(String(50), nullable=False)   # B2C, B2B, ETC
     stage = Column(String(50), default="IDEA")  # IDEA, PROTOTYPE, MVP, BETA, LAUNCH
     is_active = Column(Boolean, default=True)
+    is_public = Column(Boolean, default=True)  # 새로 추가: 공개/비공개 설정
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     # 관계 설정

@@ -9,6 +9,7 @@ class ProjectCreate(BaseModel):
     idea_name: Optional[str] = None
     service_type: str  # APP, WEB, ETC
     target_type: str   # B2C, B2B, ETC
+    is_public: bool = True  # 기본값은 공개
 
 # 프로젝트 응답
 class ProjectResponse(BaseModel):
@@ -21,6 +22,7 @@ class ProjectResponse(BaseModel):
     target_type: str
     stage: str = "IDEA"
     is_active: bool = True
+    is_public: bool = True  # 추가
     created_at: datetime
 
     class Config:
@@ -31,6 +33,7 @@ class ProjectUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     stage: Optional[str] = None  # IDEA, PROTOTYPE, MVP, BETA, LAUNCH
+    is_public: Optional[bool] = None  # 추가
 
 # 공개 프로젝트 리스트용 (간단한 정보만)
 class ProjectPublic(BaseModel):
@@ -44,3 +47,7 @@ class ProjectPublic(BaseModel):
 
     class Config:
         from_attributes = True
+
+# 프로젝트 공개 설정 변경용
+class ProjectPrivacyUpdate(BaseModel):
+    is_public: bool

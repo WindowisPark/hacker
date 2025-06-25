@@ -1,4 +1,5 @@
-﻿from fastapi import FastAPI
+﻿# backend/app/main.py 업데이트
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.database import engine, Base
 
@@ -6,8 +7,7 @@ from app.database import engine, Base
 from app.models import *
 
 # 라우터 import
-# 'ai_report'를 'ai_reports'로 수정
-from app.routers import auth, users, projects, ai_reports, lean_canvas, team_matching
+from app.routers import auth, users, projects, ai_reports, lean_canvas, team_matching, resumes, dashboard
 
 # 데이터베이스 테이블 생성
 Base.metadata.create_all(bind=engine)
@@ -32,13 +32,10 @@ app.include_router(auth.router, prefix="/auth", tags=["auth"])
 app.include_router(users.router, prefix="/users", tags=["users"])
 app.include_router(projects.router, prefix="/projects", tags=["projects"])
 app.include_router(ai_reports.router, prefix="/ai-reports", tags=["AI Reports"])
-
-# 추후 활성화 예정
 app.include_router(lean_canvas.router, prefix="/lean-canvas", tags=["lean-canvas"])
 app.include_router(team_matching.router, prefix="/team", tags=["Team Matching"])
-# app.include_router(labs.router, prefix="/labs", tags=["labs"])
-# app.include_router(dashboard.router, prefix="/dashboard", tags=["dashboard"])
-
+app.include_router(resumes.router, prefix="/resumes", tags=["Resumes"])  # 새로 추가
+app.include_router(dashboard.router, prefix="/dashboard", tags=["Dashboard"])  # 새로 추가
 
 @app.get("/health")
 async def health_check():

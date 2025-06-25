@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.user import User
-from app.schemas.user import UserResponse, UserTypeUpdate
+from app.schemas.user import UserResponse, UserTypeUpdate, UserProfileUpdate
 from app.schemas.common import SuccessResponse
 from app.auth import get_current_user
 
@@ -44,7 +44,60 @@ async def get_my_profile(current_user: dict = Depends(get_current_user), db: Ses
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="프로필 조회 중 오류가 발생했습니다."
         )
-
+    
+@router.put("/me/profile", response_model=SuccessResponse)
+async def update_my_profile(
+    profile_data: UserProfileUpdate,
+    current_user: dict = Depends(get_current_user), 
+    db: Session = Depends(get_db)
+):
+    """프로필 정보 업데이트"""
+    try:
+        user = db.query(User).filter(User.user_id == current_user["user_id"]).first()
+        
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="사용자를 찾을 수 없습니다."
+            )
+        
+        # 업데이트할 필드만 수정
+        update_data = profile_data.model_dump(exclude_unset=True)
+        
+        for field, value in update_data.items():
+            if hasattr(user, field):
+                setattr(user, field, value)
+        
+        db.commit()
+        db.refresh(user)
+        
+        # 업데이트된 사용자 정보 반환
+        user_data = {
+            "user_id": user.user_id,
+            "email": user.email,
+            "name": user.name,
+            "major": user.major,
+            "year": user.year,
+            "user_type": user.user_type,
+            "profile_info": user.profile_info,
+            "sejong_student_id": user.sejong_student_id,
+            "created_at": user.created_at
+        }
+        
+        return SuccessResponse(
+            message="프로필이 성공적으로 업데이트되었습니다.",
+            data=user_data
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="프로필 업데이트 중 오류가 발생했습니다."
+        )
+    
 @router.put("/me/type", response_model=SuccessResponse)
 async def update_user_type(
     user_type_data: UserTypeUpdate, 

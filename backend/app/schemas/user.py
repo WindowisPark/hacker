@@ -44,3 +44,10 @@ class TokenResponse(BaseModel):
 class UserCreateResponse(BaseModel):
     user_id: int
     access_token: str
+
+class UserProfileUpdate(BaseModel):
+    name: Optional[str] = None
+    major: Optional[str] = None
+    year: Optional[int] = None
+    profile_info: Optional[str] = None
+    sejong_student_id: Optional[str] = None

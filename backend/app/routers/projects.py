@@ -4,7 +4,7 @@ from typing import Optional
 from app.database import get_db
 from app.models.project import Project
 from app.models.user import User
-from app.schemas.project import ProjectCreate, ProjectResponse, ProjectUpdate
+from app.schemas.project import ProjectCreate, ProjectResponse, ProjectUpdate, ProjectPrivacyUpdate  # ProjectPrivacyUpdate 추가
 from app.schemas.common import SuccessResponse
 from app.auth import get_current_user
 
@@ -25,6 +25,7 @@ async def create_project(
             idea_name=project_data.idea_name,
             service_type=project_data.service_type,
             target_type=project_data.target_type,
+            is_public=project_data.is_public,  # 추가
             stage="IDEA"
         )
         
@@ -32,7 +33,7 @@ async def create_project(
         db.commit()
         db.refresh(new_project)
         
-        project_data = {
+        project_response = {
             "project_id": new_project.project_id,
             "owner_id": new_project.owner_id,
             "name": new_project.name,
@@ -42,12 +43,13 @@ async def create_project(
             "target_type": new_project.target_type,
             "stage": new_project.stage,
             "is_active": new_project.is_active,
+            "is_public": new_project.is_public,  # 추가
             "created_at": new_project.created_at
         }
         
         return SuccessResponse(
             message="프로젝트가 성공적으로 생성되었습니다.",
-            data=project_data
+            data=project_response
         )
         
     except Exception as e:
@@ -106,7 +108,10 @@ async def get_public_projects(
 ):
     """공개 프로젝트 목록 조회"""
     try:
-        query = db.query(Project).filter(Project.is_active == True)
+        query = db.query(Project).filter(
+            Project.is_active == True,
+            Project.is_public == True  # 공개 프로젝트만 필터
+        )
         
         if service_type:
             query = query.filter(Project.service_type == service_type)
@@ -308,3 +313,121 @@ async def delete_project(
 @router.get("/test")
 async def test_projects():
     return {"message": "Projects router working"}
+
+@router.put("/{project_id}", response_model=SuccessResponse)
+async def update_project(
+    project_id: int,
+    project_update: ProjectUpdate,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """프로젝트 정보 수정"""
+    try:
+        project = db.query(Project).filter(
+            Project.project_id == project_id,
+            Project.is_active == True
+        ).first()
+        
+        if not project:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="프로젝트를 찾을 수 없습니다."
+            )
+        
+        if project.owner_id != current_user["user_id"]:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="프로젝트를 수정할 권한이 없습니다."
+            )
+        
+        # 업데이트할 필드만 수정
+        if project_update.name is not None:
+            project.name = project_update.name
+        if project_update.description is not None:
+            project.description = project_update.description
+        if project_update.is_public is not None:  # 추가
+            project.is_public = project_update.is_public
+        if project_update.stage is not None:
+            valid_stages = ["IDEA", "PROTOTYPE", "MVP", "BETA", "LAUNCH"]
+            if project_update.stage not in valid_stages:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"유효하지 않은 단계입니다. 가능한 값: {', '.join(valid_stages)}"
+                )
+            project.stage = project_update.stage
+        
+        db.commit()
+        db.refresh(project)
+        
+        project_data = {
+            "project_id": project.project_id,
+            "owner_id": project.owner_id,
+            "name": project.name,
+            "description": project.description,
+            "idea_name": project.idea_name,
+            "service_type": project.service_type,
+            "target_type": project.target_type,
+            "stage": project.stage,
+            "is_active": project.is_active,
+            "is_public": project.is_public,  # 추가
+            "created_at": project.created_at
+        }
+        
+        return SuccessResponse(
+            message="프로젝트가 성공적으로 수정되었습니다.",
+            data=project_data
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"프로젝트 수정 중 오류: {str(e)}"
+        )
+    
+@router.put("/{project_id}/privacy", response_model=SuccessResponse)
+async def update_project_privacy(
+    project_id: int,
+    privacy_update: ProjectPrivacyUpdate,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """프로젝트 공개/비공개 설정 변경"""
+    try:
+        project = db.query(Project).filter(
+            Project.project_id == project_id,
+            Project.is_active == True
+        ).first()
+        
+        if not project:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="프로젝트를 찾을 수 없습니다."
+            )
+        
+        if project.owner_id != current_user["user_id"]:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="프로젝트 설정을 변경할 권한이 없습니다."
+            )
+        
+        project.is_public = privacy_update.is_public
+        db.commit()
+        
+        status_text = "공개" if privacy_update.is_public else "비공개"
+        
+        return SuccessResponse(
+            message=f"프로젝트가 {status_text}로 설정되었습니다.",
+            data={"project_id": project_id, "is_public": project.is_public}
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"프로젝트 설정 변경 중 오류: {str(e)}"
+        )

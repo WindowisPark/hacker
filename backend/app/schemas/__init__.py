@@ -1,3 +1,4 @@
+# backend/app/schemas/__init__.py 업데이트
 # 모든 스키마들을 import
 from .user import (
     UserRegister,
@@ -5,14 +6,16 @@ from .user import (
     UserTypeUpdate,
     UserResponse,
     TokenResponse,
-    UserCreateResponse
+    UserCreateResponse,
+    UserProfileUpdate  # 새로 추가
 )
 
 from .project import (
     ProjectCreate,
     ProjectResponse,
     ProjectUpdate,
-    ProjectPublic
+    ProjectPublic,
+    ProjectPrivacyUpdate  # 새로 추가
 )
 
 from .lean_canvas import (
@@ -40,6 +43,23 @@ from .ai_report import (
     NewIdea
 )
 
+from .resume import (  # 새로 추가
+    ResumeCreateUpdate,
+    ResumeResponse,
+    ResumePublicResponse,
+    TechStackItem,
+    WorkExperienceItem,
+    AwardItem,
+    ExternalLinkItem
+)
+
+from .dashboard import (  # 새로 추가
+    PersonalStats,
+    PlatformStats,
+    RecentActivity,
+    DashboardResponse
+)
+
 from .common import (
     SuccessResponse,
     ErrorResponse,
@@ -51,10 +71,11 @@ from .common import (
 __all__ = [
     # User schemas
     "UserRegister", "UserLogin", "UserTypeUpdate", "UserResponse", 
-    "TokenResponse", "UserCreateResponse",
+    "TokenResponse", "UserCreateResponse", "UserProfileUpdate",
     
     # Project schemas
     "ProjectCreate", "ProjectResponse", "ProjectUpdate", "ProjectPublic",
+    "ProjectPrivacyUpdate",
     
     # Lean Canvas schemas
     "LeanCanvasCreate", "LeanCanvasUpdate", "LeanCanvasResponse",
@@ -66,6 +87,13 @@ __all__ = [
     # AI Report schemas
     "AIReportRequest", "AIReportResponse", "AIReportStatus", "AIReportFeedback",
     "IdeaInfo", "ExistingServices", "NewIdea",
+    
+    # Resume schemas
+    "ResumeCreateUpdate", "ResumeResponse", "ResumePublicResponse",
+    "TechStackItem", "WorkExperienceItem", "AwardItem", "ExternalLinkItem",
+    
+    # Dashboard schemas
+    "PersonalStats", "PlatformStats", "RecentActivity", "DashboardResponse",
     
     # Common schemas
     "SuccessResponse", "ErrorResponse", "PaginatedResponse", "HealthResponse"
