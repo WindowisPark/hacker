@@ -6,7 +6,8 @@ from app.database import engine, Base
 from app.models import *
 
 # 라우터 import
-from app.routers import auth, users, projects
+# 'ai_report'를 'ai_reports'로 수정
+from app.routers import auth, users, projects, ai_reports, lean_canvas, team_matching
 
 # 데이터베이스 테이블 생성
 Base.metadata.create_all(bind=engine)
@@ -20,7 +21,7 @@ app = FastAPI(
 # CORS 설정
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 개발용, 운영에서는 구체적인 도메인 설정
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -30,13 +31,14 @@ app.add_middleware(
 app.include_router(auth.router, prefix="/auth", tags=["auth"])
 app.include_router(users.router, prefix="/users", tags=["users"])
 app.include_router(projects.router, prefix="/projects", tags=["projects"])
+app.include_router(ai_reports.router, prefix="/ai-reports", tags=["AI Reports"])
 
 # 추후 활성화 예정
-# app.include_router(lean_canvas.router, prefix="/lean-canvas", tags=["lean-canvas"])
-# app.include_router(ai_reports.router, prefix="/ai-reports", tags=["ai-reports"])
-# app.include_router(team_matching.router, prefix="/team", tags=["team-matching"])
+app.include_router(lean_canvas.router, prefix="/lean-canvas", tags=["lean-canvas"])
+app.include_router(team_matching.router, prefix="/team", tags=["Team Matching"])
 # app.include_router(labs.router, prefix="/labs", tags=["labs"])
 # app.include_router(dashboard.router, prefix="/dashboard", tags=["dashboard"])
+
 
 @app.get("/health")
 async def health_check():
